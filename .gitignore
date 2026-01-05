@@ -15,6 +15,7 @@ env/
 spec.md
 *.log
 debug_output.txt
+.sessions/
 
 # OS Files
 .DS_Store
