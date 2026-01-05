@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from dotenv import load_dotenv
 from azure.ai.projects import AIProjectClient
@@ -32,6 +32,10 @@ logging.basicConfig(
     handlers=[logging.FileHandler("spec_creator.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
+
+# Suppress verbose Azure HTTP logs
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+logging.getLogger("azure").setLevel(logging.WARNING)
 
 load_dotenv()
 
@@ -157,9 +161,9 @@ class SpecCreatorAgent:
         self._shutdown_requested = True
         console.print("\n[yellow]Shutting down gracefully...[/yellow]")
 
-    def _retry_operation(self, operation: callable, operation_name: str) -> Any:
+    def _retry_operation(self, operation: Callable[[], Any], operation_name: str) -> Any:
         """Execute an operation with retry logic."""
-        last_error = None
+        last_error: Optional[Exception] = None
         for attempt in range(1, self.config.max_retries + 1):
             try:
                 return operation()
@@ -168,7 +172,9 @@ class SpecCreatorAgent:
                 logger.warning(f"{operation_name} failed (attempt {attempt}/{self.config.max_retries}): {e}")
                 if attempt < self.config.max_retries:
                     time.sleep(self.config.retry_delay * attempt)
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"{operation_name} failed with no error captured")
 
     def initialize_client(self) -> bool:
         """Initialize the Azure AI Project client."""
@@ -177,6 +183,7 @@ class SpecCreatorAgent:
                 credential=DefaultAzureCredential(),
                 endpoint=self.config.project_endpoint,
             )
+            assert self.client is not None
             logger.info("Azure AI Project client initialized successfully")
             return True
         except Exception as e:
@@ -187,20 +194,24 @@ class SpecCreatorAgent:
     def create_agent(self) -> bool:
         """Create the AI agent and thread."""
         try:
+            assert self.client is not None
+            client = self.client  # Capture for closure
             def _create():
-                return self.client.agents.create_agent(
+                return client.agents.create_agent(
                     model=self.config.model_name,
                     name=self.config.agent_name,
                     instructions=SYSTEM_PROMPT,
                 )
 
             self.agent = self._retry_operation(_create, "Agent creation")
+            assert self.agent is not None
             self.state.agent_id = self.agent.id
 
             def _create_thread():
-                return self.client.agents.threads.create()
+                return client.agents.threads.create()
 
             self.thread = self._retry_operation(_create_thread, "Thread creation")
+            assert self.thread is not None
             self.state.thread_id = self.thread.id
 
             logger.info(f"Agent created: {self.agent.id}, Thread: {self.thread.id}")
@@ -216,9 +227,17 @@ class SpecCreatorAgent:
             return None
 
         try:
+            assert self.client is not None
+            assert self.thread is not None
+            assert self.agent is not None
+            
+            client = self.client  # Capture for closure
+            thread = self.thread  # Capture for closure
+            agent = self.agent  # Capture for closure
+            
             def _send():
-                return self.client.agents.messages.create(
-                    thread_id=self.thread.id,
+                return client.agents.messages.create(
+                    thread_id=thread.id,
                     role="user",
                     content=content,
                 )
@@ -227,9 +246,9 @@ class SpecCreatorAgent:
             self.state.add_message("user", content)
 
             def _run():
-                return self.client.agents.runs.create(
-                    thread_id=self.thread.id,
-                    agent_id=self.agent.id,
+                return client.agents.runs.create(
+                    thread_id=thread.id,
+                    agent_id=agent.id,
                 )
 
             run = self._retry_operation(_run, "Run creation")
@@ -239,7 +258,7 @@ class SpecCreatorAgent:
                     if self._shutdown_requested:
                         return None
                     time.sleep(self.config.poll_interval)
-                    run = self.client.agents.runs.get(thread_id=self.thread.id, run_id=run.id)
+                    run = client.agents.runs.get(thread_id=thread.id, run_id=run.id)
 
                     if run.status == "failed":
                         logger.error(f"Run failed: {run.last_error}")
@@ -247,15 +266,19 @@ class SpecCreatorAgent:
                         return None
 
             if run.status == "completed":
-                messages = self.client.agents.messages.list(thread_id=self.thread.id)
+                messages = client.agents.messages.list(thread_id=thread.id)
                 messages_list = list(messages)
 
                 if messages_list:
                     last_msg = messages_list[0]
                     if last_msg.role == "assistant":
-                        response = last_msg.content[0].text.value
-                        self.state.add_message("assistant", response)
-                        return response
+                        content_item = last_msg.content[0]
+                        if hasattr(content_item, 'text'):
+                            text_obj = content_item.text  # type: ignore[attr-defined]
+                            if hasattr(text_obj, 'value'):
+                                response = text_obj.value
+                                self.state.add_message("assistant", response)
+                                return response
 
             return None
         except Exception as e:
@@ -284,6 +307,7 @@ class SpecCreatorAgent:
         if self.agent and self.client:
             with console.status("[bold red]Deleting agent...[/bold red]"):
                 try:
+                    assert self.agent is not None
                     self.client.agents.delete_agent(self.agent.id)
                     console.print("[dim]Agent deleted.[/dim]")
                     logger.info(f"Agent {self.agent.id} deleted")

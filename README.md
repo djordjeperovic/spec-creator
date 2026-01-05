@@ -7,7 +7,14 @@ A Python command-line tool that leverages **Azure AI Foundry** agents to interac
 - 🤖 **AI Product Manager**: Uses Azure AI Agents (powered by GPT-5) to conduct a requirement gathering interview.
 - 📝 **Automatic Generation**: Extracts a structured `spec.md` file from the conversation once requirements are clear.
 - 🧹 **Automatic Cleanup**: Handles agent creation and deletion automatically to keep your Azure project clean.
-- 🖥️ **Rich Terminal UI**: Built with `rich` for a beautiful command-line experience.
+- 🖥️ **Rich Terminal UI**: Built with `rich` for a beautiful command-line experience with markdown rendering.
+- 💾 **Session Persistence**: Automatically saves conversation history to `.sessions/` directory as JSON files.
+- 🔄 **Retry Logic**: Built-in retry mechanism with configurable max retries and delays for robust Azure API communication.
+- 🛡️ **Graceful Shutdown**: Handles SIGINT/SIGTERM signals to save session state before exiting.
+- 📊 **Comprehensive Logging**: Logs all operations to `spec_creator.log` for debugging and audit trails.
+- ⚙️ **Environment Configuration**: Fully configurable via `.env` file (model, output file, retry settings, etc.).
+- 💬 **Interactive Commands**: Supports `save` to manually save session, `exit`/`quit` to gracefully exit with confirmation.
+- 🎯 **Structured Interview Process**: Guides users through persona definition, problem statements, requirements, user flows, and success metrics.
 
 ## Prerequisites
 
